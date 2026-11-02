@@ -1,0 +1,67 @@
+#!/bin/zsh
+# laud: lean claude — minimal tools, only laud's MCP servers, no plugins, no chrome.
+# Usage: laud [+group...] [claude args...]
+#   base      LAUD_TOOLS, default Bash Read Write Edit WebSearch WebFetch (~7.6k startup)
+#   +plan     AskUserQuestion                           (unmeasured)
+#   +agents   Agent SendMessage TaskStop ListAgents     (~+1.6k for Agent; rest unmeasured)
+#   +code     Glob Grep                                 (~+2.2k)
+#   +workflow Workflow Skill (authoring needs Skill)    (unmeasured)
+#   +master   alias: +plan +agents +code
+#   +skills   Skill (user + built-in skill listing)     (~+2.6k)
+#   +mcp      use your normal MCP config instead of laud's (still deferred)
+#   +plugins  keep enabled plugins (adds agents/hooks)
+#   +dry      print the command instead of running it
+#   +help     show this
+#
+# Machine-local config: ${XDG_CONFIG_HOME:-~/.config}/laud/config.zsh — see config.example.zsh.
+#   LAUD_CMD    launcher prefix                    default: (claude)
+#   LAUD_TOOLS  base built-in tools                default: (Bash Read Write Edit WebSearch WebFetch)
+#   LAUD_MCP    MCP config files or JSON strings   default: none
+#   LAUD_ARGS   default claude args, before yours  default: none
+
+config=${XDG_CONFIG_HOME:-$HOME/.config}/laud/config.zsh
+[[ -r $config ]] && source $config
+
+(( $#LAUD_TOOLS )) || LAUD_TOOLS=(Bash Read Write Edit WebSearch WebFetch)
+(( $#LAUD_CMD ))   || LAUD_CMD=(claude)
+typeset -aU tools=($LAUD_TOOLS)
+integer mcp=1 plugins=0 dry=0
+
+while [[ $1 == +* ]]; do
+  case $1 in
+    +plan)     tools+=(AskUserQuestion) ;;
+    +agents)   tools+=(Agent SendMessage TaskStop ListAgents) ;;
+    +code)     tools+=(Glob Grep) ;;
+    +workflow) tools+=(Workflow Skill) ;;
+    +master)   shift; set -- +plan +agents +code "$@"; continue ;;
+    +skills)   tools+=(Skill) ;;
+    +mcp)      mcp=0 ;;
+    +plugins)  plugins=1 ;;
+    +dry)      dry=1 ;;
+    +help)     sed -n '2,/^$/{s/^# \{0,1\}//;p;}' $0; exit ;;
+    *)         print -u2 "laud: unknown group $1 (see laud +help)"; exit 1 ;;
+  esac
+  shift
+done
+
+# laud's args go last: --tools and --mcp-config are variadic and would swallow a trailing prompt.
+typeset -a args=(--tools ${(j:,:)tools})
+
+if (( mcp )); then
+  args+=(--strict-mcp-config)
+  (( $#LAUD_MCP )) && args+=(--mcp-config $LAUD_MCP)
+  args+=(--no-chrome)
+fi
+
+settings=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+if (( ! plugins )) && [[ -r $settings ]]; then
+  args+=(--settings "$(jq -c '{enabledPlugins: (.enabledPlugins // {} | map_values(false))}' $settings)")
+fi
+
+cmd=($LAUD_CMD $LAUD_ARGS "$@" $args)
+
+if (( dry )); then
+  print -r -- ${(q-)cmd}
+else
+  exec $cmd
+fi
